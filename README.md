@@ -1,6 +1,6 @@
 # MySQL Exporter
 
-A MySQL database export tool written in Go that can export table structures and a specified number of data records to compressed files.
+A powerful MySQL database export utility written in Go, designed to efficiently export table structures (including indexes) and a configurable number of data records to compressed files for easy migration and testing.
 
 [中文文档](README_zh.md)
 
@@ -52,6 +52,13 @@ The exported files will contain the following:
 - `schema.sql` - Contains all table structure and index definitions
 - `data.sql` - Contains INSERT statements for all table data
 - `export.zip` - Contains the above files in a compressed package (when compression is enabled)
+
+## Use Cases
+
+- Prepare test data for development environments
+- Create database backups with a limited number of records
+- Clone database structures with sample data
+- Generate SQL scripts for database schema version control
 
 ## License
 
