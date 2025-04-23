@@ -3,9 +3,11 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"syscall"
 
 	"github.com/spf13/cobra"
 	"github.com/zhoucq/mysql-exporter/exporter"
+	"golang.org/x/term"
 )
 
 var (
@@ -27,6 +29,17 @@ var rootCmd = &cobra.Command{
 可以导出指定数据库的所有表结构（包括索引）以及每张表的指定数量数据记录。
 导出的文件可以方便地导入到其他MySQL数据库中。`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// 如果密码为空，提示用户输入密码
+		if cfgPassword == "" {
+			fmt.Print("请输入MySQL密码: ")
+			passwordBytes, err := term.ReadPassword(int(syscall.Stdin))
+			if err != nil {
+				return fmt.Errorf("读取密码失败: %w", err)
+			}
+			fmt.Println() // 添加换行符，因为ReadPassword不会自动添加
+			cfgPassword = string(passwordBytes)
+		}
+
 		config := exporter.Config{
 			Host:     cfgHost,
 			Port:     cfgPort,
@@ -60,11 +73,14 @@ func init() {
 	rootCmd.Flags().StringVar(&cfgHost, "host", "localhost", "MySQL服务器地址")
 	rootCmd.Flags().IntVar(&cfgPort, "port", 3306, "MySQL服务器端口")
 	rootCmd.Flags().StringVar(&cfgUser, "user", "root", "MySQL用户名")
-	rootCmd.Flags().StringVar(&cfgPassword, "password", "", "MySQL密码")
+	rootCmd.Flags().StringVar(&cfgPassword, "password", "", "MySQL密码（如果不提供，将会提示输入）")
 	rootCmd.Flags().StringVar(&cfgDatabase, "database", "", "要导出的数据库名")
 	rootCmd.Flags().IntVar(&cfgRows, "rows", 1000, "每张表导出的最大行数")
 	rootCmd.Flags().StringVar(&cfgOutput, "output", "./output", "输出目录路径")
 	rootCmd.Flags().BoolVar(&cfgCompress, "compress", true, "是否压缩输出文件")
 
-	rootCmd.MarkFlagRequired("database")
+	if err := rootCmd.MarkFlagRequired("database"); err != nil {
+		fmt.Println("标记必需标志时出错:", err)
+		os.Exit(1)
+	}
 }
