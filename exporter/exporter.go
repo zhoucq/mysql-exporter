@@ -142,9 +142,17 @@ func (e *Exporter) Execute() error {
 	return nil
 }
 
+// TableInfo 存储表的信息
+type TableInfo struct {
+	Name   string
+	IsView bool
+}
+
 // getTables 获取数据库中的所有表
 func (e *Exporter) getTables() ([]string, error) {
-	rows, err := e.db.Query("SHOW TABLES")
+	// 使用information_schema来区分表和视图
+	query := fmt.Sprintf("SELECT TABLE_NAME, TABLE_TYPE FROM information_schema.TABLES WHERE TABLE_SCHEMA = '%s'", e.config.Database)
+	rows, err := e.db.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("获取表列表失败: %w", err)
 	}
@@ -152,29 +160,65 @@ func (e *Exporter) getTables() ([]string, error) {
 
 	var tables []string
 	for rows.Next() {
-		var table string
-		if err := rows.Scan(&table); err != nil {
-			return nil, fmt.Errorf("读取表名失败: %w", err)
+		var tableName, tableType string
+		if err := rows.Scan(&tableName, &tableType); err != nil {
+			return nil, fmt.Errorf("读取表信息失败: %w", err)
 		}
-		tables = append(tables, table)
+		tables = append(tables, tableName)
 	}
 
 	return tables, nil
 }
 
+// isView 检查表是否为视图
+func (e *Exporter) isView(tableName string) (bool, error) {
+	query := fmt.Sprintf("SELECT TABLE_TYPE FROM information_schema.TABLES WHERE TABLE_SCHEMA = '%s' AND TABLE_NAME = '%s'",
+		e.config.Database, tableName)
+	var tableType string
+	err := e.db.QueryRow(query).Scan(&tableType)
+	if err != nil {
+		return false, fmt.Errorf("检查表类型失败: %w", err)
+	}
+	return tableType == "VIEW", nil
+}
+
 // exportTableSchema 导出表结构
 func (e *Exporter) exportTableSchema(table string, file *os.File) error {
-	// 获取表的CREATE语句
-	var tableSchema string
-	query := fmt.Sprintf("SHOW CREATE TABLE `%s`", table)
-	if err := e.db.QueryRow(query).Scan(&table, &tableSchema); err != nil {
-		return fmt.Errorf("获取表 %s 的创建语句失败: %w", table, err)
+	// 检查是否为视图
+	isView, err := e.isView(table)
+	if err != nil {
+		return err
 	}
 
-	// 写入表结构到文件
-	content := fmt.Sprintf("-- 表结构 `%s`\nDROP TABLE IF EXISTS `%s`;\n%s;\n\n", table, table, tableSchema)
-	if _, err := file.WriteString(content); err != nil {
-		return fmt.Errorf("写入表 %s 的结构失败: %w", table, err)
+	// 获取表或视图的CREATE语句
+	var tableSchema string
+	var query string
+
+	if isView {
+		query = fmt.Sprintf("SHOW CREATE VIEW `%s`", table)
+		var viewName, characterSet, collation string
+		if err := e.db.QueryRow(query).Scan(&viewName, &tableSchema, &characterSet, &collation); err != nil {
+			return fmt.Errorf("获取视图 %s 的创建语句失败: %w", table, err)
+		}
+		// 写入视图结构到文件
+		content := fmt.Sprintf("-- 视图结构 `%s`\nDROP VIEW IF EXISTS `%s`;\n%s;\n\n", table, table, tableSchema)
+		if _, err := file.WriteString(content); err != nil {
+			return fmt.Errorf("写入视图 %s 的结构失败: %w", table, err)
+		}
+	} else {
+		query = fmt.Sprintf("SHOW CREATE TABLE `%s`", table)
+		var tableName string
+		if err := e.db.QueryRow(query).Scan(&tableName, &tableSchema); err != nil {
+			return fmt.Errorf("获取表 %s 的创建语句失败: %w", table, err)
+		}
+		// 重置自增ID
+		tableSchema = resetAutoIncrement(tableSchema)
+
+		// 写入表结构到文件
+		content := fmt.Sprintf("-- 表结构 `%s`\nDROP TABLE IF EXISTS `%s`;\n%s;\n\n", table, table, tableSchema)
+		if _, err := file.WriteString(content); err != nil {
+			return fmt.Errorf("写入表 %s 的结构失败: %w", table, err)
+		}
 	}
 
 	return nil
@@ -182,10 +226,25 @@ func (e *Exporter) exportTableSchema(table string, file *os.File) error {
 
 // exportTableData 导出表数据
 func (e *Exporter) exportTableData(table string, file *os.File) error {
-	// 写入表数据的注释
-	comment := fmt.Sprintf("\n-- 表数据 `%s`\nLOCK TABLES `%s` WRITE;\n", table, table)
-	if _, err := file.WriteString(comment); err != nil {
-		return fmt.Errorf("写入表 %s 的数据注释失败: %w", table, err)
+	// 检查是否为视图
+	isView, err := e.isView(table)
+	if err != nil {
+		return err
+	}
+
+	// 根据是否为视图，使用不同的注释和处理方式
+	if isView {
+		// 对于视图，只添加注释，不锁定表
+		comment := fmt.Sprintf("\n-- 视图数据 `%s`\n-- 注意：视图数据仅供参考，不会被导入\n", table)
+		if _, err := file.WriteString(comment); err != nil {
+			return fmt.Errorf("写入视图 %s 的数据注释失败: %w", table, err)
+		}
+	} else {
+		// 对于普通表，添加注释并锁定表
+		comment := fmt.Sprintf("\n-- 表数据 `%s`\nLOCK TABLES `%s` WRITE;\n", table, table)
+		if _, err := file.WriteString(comment); err != nil {
+			return fmt.Errorf("写入表 %s 的数据注释失败: %w", table, err)
+		}
 	}
 
 	// 获取表的所有列
@@ -196,9 +255,12 @@ func (e *Exporter) exportTableData(table string, file *os.File) error {
 
 	// 如果没有列，直接返回
 	if len(columns) == 0 {
-		endComment := fmt.Sprintf("UNLOCK TABLES;\n")
-		if _, err := file.WriteString(endComment); err != nil {
-			return fmt.Errorf("写入表 %s 的解锁语句失败: %w", table, err)
+		if !isView {
+			// 只有普通表需要解锁
+			endComment := fmt.Sprintf("UNLOCK TABLES;\n")
+			if _, err := file.WriteString(endComment); err != nil {
+				return fmt.Errorf("写入表 %s 的解锁语句失败: %w", table, err)
+			}
 		}
 		return nil
 	}
@@ -207,6 +269,11 @@ func (e *Exporter) exportTableData(table string, file *os.File) error {
 	query := fmt.Sprintf("SELECT * FROM `%s` LIMIT %d", table, e.config.MaxRows)
 	rows, err := e.db.Query(query)
 	if err != nil {
+		// 如果是视图查询失败，记录错误但继续执行
+		if isView {
+			fmt.Printf("  警告: 无法查询视图 %s 的数据: %v\n", table, err)
+			return nil
+		}
 		return fmt.Errorf("查询表 %s 的数据失败: %w", table, err)
 	}
 	defer rows.Close()
@@ -216,6 +283,9 @@ func (e *Exporter) exportTableData(table string, file *os.File) error {
 
 	// 遍历每一行数据
 	rowCount := 0
+	batchSize := 0
+	batchLimit := 1000 // 每批最多1000行
+
 	for rows.Next() {
 		// 创建一个动态大小的值切片
 		values := make([]interface{}, len(columns))
@@ -226,6 +296,11 @@ func (e *Exporter) exportTableData(table string, file *os.File) error {
 
 		// 扫描行数据
 		if err := rows.Scan(valuePtrs...); err != nil {
+			if isView {
+				// 如果是视图数据读取失败，记录警告并继续
+				fmt.Printf("  警告: 读取视图 %s 的行数据失败: %v\n", table, err)
+				continue
+			}
 			return fmt.Errorf("读取表 %s 的行数据失败: %w", table, err)
 		}
 
@@ -249,49 +324,91 @@ func (e *Exporter) exportTableData(table string, file *os.File) error {
 			}
 		}
 
-		// 生成INSERT语句
-		if rowCount == 0 {
-			// 第一行，写入完整的INSERT语句
+		// 确定实体类型（表或视图）
+		var entityType string
+		if isView {
+			entityType = "视图"
+		} else {
+			entityType = "表"
+		}
+
+		// 如果是新批次的开始，写入完整的INSERT语句
+		if batchSize == 0 {
 			insertStmt := fmt.Sprintf("INSERT INTO `%s` (%s) VALUES (%s)",
 				table, columnsList, strings.Join(valueStrings, ", "))
 			if _, err := file.WriteString(insertStmt); err != nil {
-				return fmt.Errorf("写入表 %s 的INSERT语句失败: %w", table, err)
+				return fmt.Errorf("写入%s %s 的INSERT语句失败: %w", entityType, table, err)
 			}
 		} else {
 			// 后续行，只写入值部分
 			insertValues := fmt.Sprintf(",\n(%s)", strings.Join(valueStrings, ", "))
 			if _, err := file.WriteString(insertValues); err != nil {
-				return fmt.Errorf("写入表 %s 的数据值失败: %w", table, err)
+				return fmt.Errorf("写入%s %s 的数据值失败: %w", entityType, table, err)
 			}
 		}
 
 		rowCount++
-	}
+		batchSize++
 
-	// 如果有数据，添加分号结束INSERT语句
-	if rowCount > 0 {
-		if _, err := file.WriteString(";\n"); err != nil {
-			return fmt.Errorf("写入表 %s 的INSERT语句结束符失败: %w", table, err)
+		// 如果当前批次已满或者是最后一行，结束当前INSERT语句并开始新批次
+		if batchSize >= batchLimit {
+			if _, err := file.WriteString(";\n"); err != nil {
+				return fmt.Errorf("写入%s %s 的INSERT语句结束符失败: %w", entityType, table, err)
+			}
+			batchSize = 0 // 重置批次大小
 		}
 	}
 
-	// 写入解锁表的语句
-	endComment := fmt.Sprintf("UNLOCK TABLES;\n")
-	if _, err := file.WriteString(endComment); err != nil {
-		return fmt.Errorf("写入表 %s 的解锁语句失败: %w", table, err)
+	// 如果有未完成的批次，添加分号结束INSERT语句
+	if batchSize > 0 {
+		if _, err := file.WriteString(";\n"); err != nil {
+			var entityType string
+			if isView {
+				entityType = "视图"
+			} else {
+				entityType = "表"
+			}
+			return fmt.Errorf("写入%s %s 的INSERT语句结束符失败: %w", entityType, table, err)
+		}
 	}
 
-	fmt.Printf("  导出了表 %s 的 %d 行数据\n", table, rowCount)
+	// 只有普通表需要解锁
+	if !isView {
+		endComment := fmt.Sprintf("UNLOCK TABLES;\n")
+		if _, err := file.WriteString(endComment); err != nil {
+			return fmt.Errorf("写入表 %s 的解锁语句失败: %w", table, err)
+		}
+	}
+
+	var entityType string
+	if isView {
+		entityType = "视图"
+	} else {
+		entityType = "表"
+	}
+	fmt.Printf("  导出了%s %s 的 %d 行数据\n", entityType, table, rowCount)
 	return nil
 }
 
-// getTableColumns 获取表的所有列名
+// getTableColumns 获取表或视图的所有列名
 func (e *Exporter) getTableColumns(table string) ([]string, error) {
-	// 查询表的列信息
+	// 检查是否为视图
+	isView, err := e.isView(table)
+	if err != nil {
+		return nil, err
+	}
+
+	// 确定实体类型（表或视图）
+	entityType := "表"
+	if isView {
+		entityType = "视图"
+	}
+
+	// 查询表或视图的列信息
 	query := fmt.Sprintf("SHOW COLUMNS FROM `%s`", table)
 	rows, err := e.db.Query(query)
 	if err != nil {
-		return nil, fmt.Errorf("获取表 %s 的列信息失败: %w", table, err)
+		return nil, fmt.Errorf("获取%s %s 的列信息失败: %w", entityType, table, err)
 	}
 	defer rows.Close()
 
@@ -300,7 +417,7 @@ func (e *Exporter) getTableColumns(table string) ([]string, error) {
 	for rows.Next() {
 		var field, typ, null, key, def, extra sql.NullString
 		if err := rows.Scan(&field, &typ, &null, &key, &def, &extra); err != nil {
-			return nil, fmt.Errorf("读取表 %s 的列信息失败: %w", table, err)
+			return nil, fmt.Errorf("读取%s %s 的列信息失败: %w", entityType, table, err)
 		}
 		columns = append(columns, field.String)
 	}
@@ -373,6 +490,25 @@ func addFileToZip(zipWriter *zip.Writer, filePath, zipPath string) error {
 	}
 
 	return nil
+}
+
+// resetAutoIncrement 重置CREATE TABLE语句中的AUTO_INCREMENT值
+func resetAutoIncrement(createTableStmt string) string {
+	// 使用正则表达式查找并替换AUTO_INCREMENT=数字
+	// 这里使用简单的字符串替换方法
+	autoIncrIndex := strings.Index(createTableStmt, "AUTO_INCREMENT=")
+	if autoIncrIndex == -1 {
+		return createTableStmt // 没有找到AUTO_INCREMENT
+	}
+
+	// 找到AUTO_INCREMENT=后面的数字结束位置
+	endIndex := autoIncrIndex + len("AUTO_INCREMENT=")
+	for endIndex < len(createTableStmt) && (createTableStmt[endIndex] >= '0' && createTableStmt[endIndex] <= '9') {
+		endIndex++
+	}
+
+	// 替换AUTO_INCREMENT值为1
+	return createTableStmt[:autoIncrIndex] + "AUTO_INCREMENT=1" + createTableStmt[endIndex:]
 }
 
 // escapeString 转义SQL字符串中的特殊字符
