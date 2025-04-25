@@ -60,6 +60,27 @@ The exported files will contain the following:
 - Clone database structures with sample data
 - Generate SQL scripts for database schema version control
 
+## CI/CD
+
+This project uses GitHub Actions for continuous integration and deployment:
+
+- **Automated Linting**: Code quality is checked using golangci-lint.
+- **Automated Testing**: All code changes are automatically tested.
+- **Multi-platform Builds**: The application is built for multiple platforms (Linux, macOS, Windows) and architectures (amd64, arm64).
+- **Automated Releases**: When a new tag is pushed (e.g., `v1.0.0`), a GitHub release is automatically created with pre-built binaries for all supported platforms.
+
+### Creating a Release
+
+To create a new release:
+
+1. Tag the commit with a version number:
+   ```bash
+   git tag v1.0.0
+   git push origin v1.0.0
+   ```
+
+2. GitHub Actions will automatically build the binaries and create a release with the built artifacts.
+
 ## License
 
 MIT

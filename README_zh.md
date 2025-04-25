@@ -53,6 +53,27 @@ mysql-exporter --host localhost --port 3306 --user root --password your_password
 - `data.sql` - 包含所有表的数据INSERT语句
 - `export.zip` - 包含以上文件的压缩包（当启用压缩时）
 
+## CI/CD
+
+本项目使用GitHub Actions进行持续集成和部署：
+
+- **自动代码检查**：使用golangci-lint检查代码质量。
+- **自动测试**：所有代码更改都会自动进行测试。
+- **多平台构建**：应用程序会为多个平台（Linux、macOS、Windows）和架构（amd64、arm64）构建。
+- **自动发布**：当推送新标签（例如`v1.0.0`）时，GitHub会自动创建一个包含所有支持平台预构建二进制文件的发布版本。
+
+### 创建发布版本
+
+要创建新的发布版本：
+
+1. 使用版本号标记提交：
+   ```bash
+   git tag v1.0.0
+   git push origin v1.0.0
+   ```
+
+2. GitHub Actions将自动构建二进制文件并创建包含构建产物的发布版本。
+
 ## 许可证
 
 MIT

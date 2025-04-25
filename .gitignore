@@ -1,6 +1,7 @@
 # 编译后的二进制文件
 /mysql-exporter
 /output/
+/dist/
 
 # IDE文件
 .idea/
@@ -22,3 +23,9 @@ go.sum
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# CI/CD相关
+*.zip
+*.tar.gz
+*.tar
+*.gz
