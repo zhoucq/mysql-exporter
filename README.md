@@ -64,12 +64,13 @@ The exported files will contain the following:
 
 This project uses GitHub Actions for continuous integration and deployment:
 
-- **Automated Linting**: Code quality is checked using golangci-lint.
 - **Automated Testing**: All code changes are automatically tested.
 - **Multi-platform Builds**: The application is built for multiple platforms (Linux, macOS, Windows) and architectures (amd64, arm64).
 - **Automated Releases**: When a new tag is pushed (e.g., `v1.0.0`), a GitHub release is automatically created with pre-built binaries for all supported platforms.
 
-### Creating a Release
+### Development
+
+#### Creating a Release
 
 To create a new release:
 

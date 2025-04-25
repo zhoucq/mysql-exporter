@@ -57,12 +57,13 @@ mysql-exporter --host localhost --port 3306 --user root --password your_password
 
 本项目使用GitHub Actions进行持续集成和部署：
 
-- **自动代码检查**：使用golangci-lint检查代码质量。
 - **自动测试**：所有代码更改都会自动进行测试。
 - **多平台构建**：应用程序会为多个平台（Linux、macOS、Windows）和架构（amd64、arm64）构建。
 - **自动发布**：当推送新标签（例如`v1.0.0`）时，GitHub会自动创建一个包含所有支持平台预构建二进制文件的发布版本。
 
-### 创建发布版本
+### 开发
+
+#### 创建发布版本
 
 要创建新的发布版本：
 
