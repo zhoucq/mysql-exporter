@@ -21,6 +21,9 @@ jobs:
           go-version: '1.24'
           check-latest: true
 
+      - name: Ensure dependencies
+        run: go mod tidy
+
       - name: Run tests
         run: |
           # Check if there are any test files
@@ -50,6 +53,9 @@ jobs:
         with:
           go-version: '1.24'
           check-latest: true
+
+      - name: Ensure dependencies
+        run: go mod tidy
 
       - name: Build
         env:
